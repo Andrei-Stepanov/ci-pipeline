@@ -3,8 +3,10 @@
 set -x
 
 base_dir="$(pwd)"
+mkdir -p $base_dir/logs
+
+{ #group for tee
 output_dir="/home/output/"
-pwd
 
 if [ "${branch}" = "rawhide" ]; then
     VERSION="rawhide"
@@ -14,7 +16,6 @@ fi
 
 REF="fedora/${branch}/x86_64/atomic-host"
 
-mkdir -p $base_dir/logs
 touch $base_dir/logs/ostree.props
 
 if [[ ! -e $output_dir/ostree ]]; then
@@ -102,6 +103,13 @@ fi
 
 # Record the commit so we can test it later
 commit=$(ostree --repo=$output_dir/ostree rev-parse ${REF})
+ostree_version=$(ostree --repo=${output_dir}/ostree show --print-metadata-key=version $REF| sed -e "s/'//g")
+ostree_shortsha=$(ostree --repo=${output_dir}/ostree rev-parse $REF| cut -c -15)
 cat << EOF > $base_dir/logs/ostree.props
 commit=$commit
+ostree_version=$ostree_version
+ostree_shortsha=$ostree_shortsha
+imgname=fedora-atomic-$ostree_version-$ostree_shortsha
 EOF
+
+} 2>&1 | tee $base_dir/logs/console.log  #group for tee

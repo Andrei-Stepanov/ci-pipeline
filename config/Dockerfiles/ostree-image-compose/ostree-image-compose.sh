@@ -2,25 +2,19 @@
 
 set -xeuo pipefail
 
-# A simple shell script to automate v2c converstion
-# using Image Factory in a container
-
-# argument 1: Path to file containing the image to be converted
-
-# Factory defaults to wanting a root PW in the TDL - this causes
-# problems with converted images - just force it
-# TODO: Point the working directories at the bind mounted location?
-
-base_dir="$(pwd)"
 output_dir="/home/output/"
-pwd
+base_dir="$(pwd)"
+mkdir -p $base_dir/logs
 
 # Start libvirtd
-ls /var/run/libvirt
 mkdir -p /var/run/libvirt
 libvirtd &
 sleep 5
 virtlogd &
+
+pushd ${output_dir}/ostree
+python -m SimpleHTTPServer &
+popd
 
 chmod 666 /dev/kvm
 
@@ -36,6 +30,17 @@ function clean_up {
 }
 trap clean_up EXIT SIGHUP SIGINT SIGTERM
 
+{ #group for tee
+
+# A simple shell script to automate v2c converstion
+# using Image Factory in a container
+
+# argument 1: Path to file containing the image to be converted
+
+# Factory defaults to wanting a root PW in the TDL - this causes
+# problems with converted images - just force it
+# TODO: Point the working directories at the bind mounted location?
+
 # Do our thing
 if [ "${branch}" = "rawhide" ]; then
     VERSION="rawhide"
@@ -45,13 +50,12 @@ fi
 
 REF="fedora/${branch}/x86_64/atomic-host"
 
-mkdir -p ${base_dir}/logs
 touch ${base_dir}/logs/ostree.props
 
 imgdir=/var/lib/imagefactory/storage/
 
-version=$(ostree --repo=${output_dir}/ostree show --print-metadata-key=version $REF| sed -e "s/'//g")
-release=$(ostree --repo=${output_dir}/ostree rev-parse $REF| cut -c -15)
+#version=$(ostree --repo=${output_dir}/ostree show --print-metadata-key=version $REF| sed -e "s/'//g")
+#release=$(ostree --repo=${output_dir}/ostree rev-parse $REF| cut -c -15)
 
 if [ -d "${output_dir}/images" ]; then
     for image in ${output_dir}/images/fedora-atomic-*.qcow2; do
@@ -60,17 +64,13 @@ if [ -d "${output_dir}/images" ]; then
             prev_img=$(ls -tr ${output_dir}/images/fedora-atomic-*.qcow2 | tail -n 1)
             prev_rel=$(echo $prev_img | sed -e 's/.*-\([^-]*\).qcow2/\1/')
             # Don't fail if the previous build has been pruned
-            (rpm-ostree db --repo=${output_dir}/ostree diff $prev_rel $release || echo "Previous build has been pruned") | tee ${base_dir}/logs/packages.txt
+            (rpm-ostree db --repo=${output_dir}/ostree diff $prev_rel $ostree_shortsha || echo "Previous build has been pruned") | tee ${base_dir}/logs/packages.txt
         fi
         break
     done
 else
     mkdir ${output_dir}/images
 fi
-
-pushd ${output_dir}/ostree
-python -m SimpleHTTPServer &
-popd
 
 # Grab the kickstart file from fedora upstream
 curl -o ${base_dir}/logs/fedora-atomic.ks https://pagure.io/fedora-kickstarts/raw/${branch}/f/fedora-atomic.ks
@@ -127,7 +127,7 @@ EOF
 imagefactory --debug --imgdir $imgdir --timeout 3000 base_image ${base_dir}/logs/fedora-${branch}.tdl --parameter offline_icicle true --file-parameter install_script ${base_dir}/logs/fedora-atomic.ks
 
 # convert to qcow
-imgname="fedora-atomic-$version-$release"
+#imgname="fedora-atomic-$version-$ostree_shortsha"
 qemu-img convert -c -p -O qcow2 $imgdir/*body ${output_dir}/images/$imgname.qcow2
 
 # Record the commit so we can test it later
@@ -148,3 +148,5 @@ fi
 # delete images over 3 days old but don't delete what our latest link points to
 find . -type f -mtime +3 ! -name "$latest" -exec rm -v {} \;
 popd
+
+} 2>&1 | tee ${base_dir}/logs/console.log #group for tee
